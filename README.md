@@ -23,7 +23,7 @@
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/your-repo/scan-in.git
+    git clone https://github.com/ahmadfdr/scanin.git
     cd scan-in
     ```
 

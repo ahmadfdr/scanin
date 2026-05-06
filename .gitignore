@@ -19,3 +19,9 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+#Misc
+*.txt
+*.md
+!README.md
+.geminiignore
