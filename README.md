@@ -5,25 +5,22 @@
 ## 🚀 Key Features
 
 *   **Subdomain Discovery:** 
-    *   **Passive:** Automated querying of `crt.sh` (Certificate Transparency logs).
+    *   **Passive:** Automated querying of `crt.sh` (Certificate Transparency logs) with robust retry logic.
     *   **Active:** Fast DNS resolution for user-provided host lists.
 *   **High-Performance Probing:**
-    *   **Optimized Threading:** Uses a flattened `ThreadPoolExecutor` to probe hosts and paths concurrently, preventing bottlenecks from slow targets.
+    *   **Optimized Threading:** Uses a flattened `ThreadPoolExecutor` to probe hosts and paths concurrently.
     *   **Efficient Requests:** Employs `HTTP HEAD` requests for speed, falling back to `GET` only when necessary.
 *   **Accuracy (Anti-False Positive):**
     *   **Soft 404 Detection:** Automatically identifies and filters out "fake 200 OK" responses by fingerprinting non-existent random paths.
-*   **Comprehensive Catalogue:** Scans for common leak patterns including:
-    *   Version Control Systems (`.git`, `.svn`)
-    *   Environment & Secrets (`.env`, `credentials.json`)
-    *   Application Configs (`wp-config.php`, `web.config`)
-    *   Backups, Logs, and CI/CD configurations.
-*   **Clean Reporting:** Generates structured `.json` reports for easy analysis and integration with other tools.
+*   **Debugging & Troubleshooting:**
+    *   **Verbose Logging:** Use `--debug` to see detailed discovery and DNS resolution traces.
+    *   **Phase Isolation:** Use `--phase1-only` to test subdomain discovery without running the full scan.
 
 ## 🛠️ Installation
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/ahmadfdr/scanin.git
+    git clone https://github.com/your-repo/scan-in.git
     cd scan-in
     ```
 
@@ -40,16 +37,16 @@ Perform a passive subdomain discovery and scan for all sensitive categories:
 python scanner.py -d example.com
 ```
 
+### Debugging Subdomain Discovery
+If you suspect subdomains are being missed, run with verbose logging and isolate Phase 1:
+```bash
+python scanner.py -d example.com --debug --phase1-only
+```
+
 ### Advanced Scan
 Bruteforce using a custom host list with high concurrency and custom output:
 ```bash
 python scanner.py -d example.com --hosts hosts.txt -t 50 --output my_scan
-```
-
-### Specific Categories
-Limit the scan to specific types of files (e.g., VCS and Environment secrets):
-```bash
-python scanner.py -d example.com --categories VCS ENV_SECRETS
 ```
 
 ### Command Line Options
@@ -63,6 +60,8 @@ python scanner.py -d example.com --categories VCS ENV_SECRETS
 | `--no-crtsh` | Skip passive discovery via crt.sh | False |
 | `--no-redirects`| Do not follow HTTP redirects | False |
 | `--output` | Base filename for the JSON report | scan_report |
+| `--debug` | Enable verbose debug logging | False |
+| `--phase1-only` | Stop after Phase 1 discovery | False |
 
 ## 📊 Report Format
 
@@ -78,4 +77,4 @@ The tool generates a `.json` file containing:
 **For authorized security testing only.** Always obtain written permission from the target organization before running this tool. The author is not responsible for any misuse or damage caused by this application.
 
 ---
-*Built with ❤️ by @ahmadfdr.*
+*Built with ❤️ by ahmadfdr.*

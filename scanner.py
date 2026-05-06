@@ -8,6 +8,7 @@ import time
 import argparse
 import random
 import string
+import re
 import os
 import concurrent.futures
 from datetime import datetime
@@ -25,7 +26,7 @@ except ImportError:
 
 # Constants & Configuration
 COLORS = {
-    "CRITICAL": "\033[91m", "HIGH": "\033[93m", "MEDIUM": "\033[94m",
+    "CRITICAL": "\033[91m", "HIGH": "\033[38;5;208m", "MEDIUM": "\033[93m",
     "LOW": "\033[96m", "INFO": "\033[37m", "RESET": "\033[0m",
     "BOLD": "\033[1m", "GREEN": "\033[92m", "GRAY": "\033[90m"
 }
@@ -72,25 +73,71 @@ class SensitiveScanner:
     def fetch_crtsh(self, domain):
         subdomains = set()
         url = f"https://crt.sh/?q=%25.{domain}&output=json"
-        try:
-            resp = self.session.get(url, timeout=15)
-            resp.raise_for_status()
-            for entry in resp.json():
-                for name in entry.get("name_value", "").splitlines():
-                    name = name.strip().lower().lstrip("*.")
-                    if name.endswith(f".{domain}") or name == domain:
-                        subdomains.add(name)
-        except Exception as e:
-            self.log(f"  [!] crt.sh error: {e}", "GRAY")
+        max_retries = 3
+        
+        if self.args.debug:
+            self.log(f"[DEBUG] Querying crt.sh: {url}", "GRAY")
+
+        for attempt in range(max_retries):
+            try:
+                resp = self.session.get(url, timeout=30)
+                resp.raise_for_status()
+                data = resp.json()
+                
+                if self.args.debug:
+                    self.log(f"[DEBUG] crt.sh returned {len(data)} certificate entries", "GRAY")
+
+                for entry in data:
+                    # Extract from all possible fields that might contain names
+                    names_found = set()
+                    for field in ["common_name", "name_value"]:
+                        raw = entry.get(field, "")
+                        if raw:
+                            # Split by common delimiters and handle wildcards
+                            for name in re.split(r"[\s\n,]+", raw):
+                                clean_name = name.strip().lower().lstrip("*.")
+                                if clean_name:
+                                    names_found.add(clean_name)
+                    
+                    for name in names_found:
+                        if name.endswith(f".{domain}") or name == domain:
+                            if name not in subdomains:
+                                if self.args.debug:
+                                    self.log(f"[DEBUG] Found subdomain: {name}", "GRAY")
+                                subdomains.add(name)
+                        elif self.args.debug:
+                            # Log why a name was rejected
+                            self.log(f"[DEBUG] Skipping name (out of scope): {name}", "GRAY")
+                            
+                return subdomains
+            except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
+                if attempt < max_retries - 1:
+                    self.log(f"  [!] crt.sh timeout/error, retrying ({attempt + 1}/{max_retries})...", "GRAY")
+                    time.sleep(2)
+                else:
+                    self.log(f"  [!] crt.sh failed after {max_retries} attempts: {e}", "GRAY")
         return subdomains
 
     def resolve_hosts(self, hosts):
         live = set()
+        if self.args.debug:
+            self.log(f"[DEBUG] Attempting to resolve {len(hosts)} unique hosts...", "GRAY")
+
         def check(h):
             try:
+                # Use a specific port to help resolution if needed, though 80 is standard
                 socket.getaddrinfo(h, None)
+                if self.args.debug:
+                    self.log(f"[DEBUG] Resolution SUCCESS: {h}", "GREEN")
                 return h
-            except: return None
+            except socket.gaierror as e:
+                if self.args.debug:
+                    self.log(f"[DEBUG] Resolution FAILED: {h} ({e})", "GRAY")
+                return None
+            except Exception as e:
+                if self.args.debug:
+                    self.log(f"[DEBUG] Resolution ERROR: {h} ({e})", "GRAY")
+                return None
         
         with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
             results = executor.map(check, hosts)
@@ -172,18 +219,22 @@ class SensitiveScanner:
         live_hosts = self.resolve_hosts(hosts)
         self.log(f"[+] Identified {len(live_hosts)} live hosts\n", "GREEN")
 
+        if self.args.phase1_only:
+            self.log("[!] Phase 1 only requested. Exiting.", "INFO")
+            return
+
         if not live_hosts: return
 
         self.log("[*] Phase 2: Vulnerability Probing", "BOLD")
         self.log(f"[*] Soft 404 detection enabled. Threads: {self.args.threads}\n", "GRAY")
 
-        tasks = []
+        tasks = set()
         for host in live_hosts:
             for scheme in self.args.schemes:
                 self.detect_soft404(host, scheme)
                 for cat in self.args.categories:
                     for path in SENSITIVE_PATHS.get(cat, []):
-                        tasks.append((host, scheme, cat, path))
+                        tasks.add((host, scheme, cat, path))
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.args.threads) as executor:
             future_to_probe = {executor.submit(self.probe_url, *t): t for t in tasks}
@@ -238,6 +289,8 @@ def main():
     parser.add_argument("--schemes", nargs="+", default=["https", "http"])
     parser.add_argument("--categories", nargs="+", default=list(SENSITIVE_PATHS.keys()))
     parser.add_argument("--output", default="scan_report", help="Output filename (base)")
+    parser.add_argument("--debug", action="store_true", help="Enable verbose debug logging")
+    parser.add_argument("--phase1-only", action="store_true", help="Stop after Phase 1 discovery")
     
     args = parser.parse_args()
     print(f"\n{COLORS['BOLD']}{COLORS['GRAY']}Scan.in — Lightweight Sensitive File Discovery{COLORS['RESET']}")
