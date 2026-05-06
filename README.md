@@ -1,4 +1,4 @@
-# Scan.in — Sensitive File Discovery Tool
+# Scan.in - Sensitive File Discovery Tool
 
 **Scan.in** is a high-performance, lightweight black-box security tool designed to discover exposed sensitive files and directories across subdomains. It aligns with **OWASP Top 10 A05: Security Misconfiguration** to help security engineers and researchers identify data leaks and server misconfigurations.
 
