@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Scan.in — Sensitive File Discovery Tool"""
+"""Scan.in - Sensitive File Discovery Tool"""
 
 import sys
 import json
@@ -146,52 +146,123 @@ class SensitiveScanner:
         return live
 
     # Probing Logic
-    def detect_soft404(self, host, scheme):
-        """Identify hosts that return 200 OK for non-existent paths"""
-        rand_path = "".join(random.choices(string.ascii_lowercase + string.digits, k=12)) + ".php"
-        url = f"{scheme}://{host}/{rand_path}"
+    def autocalibrate(self, host, scheme):
+        """Fingerprint a non-existent path to establish a baseline for 404/Soft 404 pages."""
+        key = f"{scheme}://{host}"
+        rand_path = "".join(random.choices(string.ascii_lowercase + string.digits, k=16))
+        url = urljoin(f"{scheme}://{host}/", rand_path)
+        
         try:
             resp = self.session.get(url, timeout=self.args.timeout, verify=False, allow_redirects=True)
-            if resp.status_code == 200:
-                self.soft404_registry[host] = {
-                    "length": len(resp.content),
-                    "text_snippet": resp.text[:100]
-                }
+            self.soft404_registry[key] = {
+                "status_code": resp.status_code,
+                "length": len(resp.content),
+                "words": len(resp.text.split()),
+                "lines": len(resp.text.splitlines()),
+                "title": self._extract_tag(resp.text, "title"),
+                "h1": self._extract_tag(resp.text, "h1")
+            }
+            if self.args.debug:
+                f = self.soft404_registry[key]
+                self.log(f"[DEBUG] Autocalibrated {key}: HTTP {f['status_code']}, {f['words']} words, Title: '{f['title']}'", "GRAY")
+        except Exception as e:
+            if self.args.debug:
+                self.log(f"[DEBUG] Autocalibration failed for {key}: {e}", "GRAY")
+
+    def _extract_tag(self, html, tag):
+        """Simple regex extraction for HTML tags."""
+        match = re.search(rf"<{tag}[^>]*>(.*?)</{tag}>", html, re.IGNORECASE | re.DOTALL)
+        return match.group(1).strip() if match else ""
+
+    def is_soft_404(self, host, scheme, url, resp):
+        """Compare response against the host's autocalibration fingerprint."""
+        key = f"{scheme}://{host}"
+        if key not in self.soft404_registry:
+            return False
+            
+        f = self.soft404_registry[key]
+        
+        # 1. Exact Status Code Match (if the baseline was already a 404/403)
+        if resp.status_code == f["status_code"] and resp.status_code >= 400:
+            return True
+
+        # 2. Extract current features
+        # For performance, only do full body analysis if status is 200/206
+        if resp.status_code not in (200, 206):
+            return False
+
+        # Fetch full body for analysis
+        full_text = resp.text
+        curr_words = len(full_text.split())
+        curr_lines = len(full_text.splitlines())
+        curr_title = self._extract_tag(full_text, "title")
+        curr_h1 = self._extract_tag(full_text, "h1")
+
+        # 3. Fuzzy Comparison
+        # Title/H1 match is a very strong indicator of a template error page
+        if f["title"] and curr_title == f["title"]:
+            if self.args.debug: self.log(f"[DEBUG] Soft 404 Match (Title): {url}", "GRAY")
+            return True
+        if f["h1"] and curr_h1 == f["h1"]:
+            if self.args.debug: self.log(f"[DEBUG] Soft 404 Match (H1): {url}", "GRAY")
+            return True
+
+        # Word/Line count within a tight 5% tolerance
+        word_diff = abs(curr_words - f["words"])
+        line_diff = abs(curr_lines - f["lines"])
+        
+        if word_diff <= (f["words"] * 0.05) and line_diff <= (f["lines"] * 0.05):
+            if self.args.debug: 
+                self.log(f"[DEBUG] Soft 404 Match (Fuzzy Words/Lines): {url} (Diff: {word_diff}w, {line_diff}l)", "GRAY")
+            return True
+
+        # 4. Heuristic: Common 404 keywords in body
+        body_lower = full_text.lower()
+        indicators = ["page not found", "404 error", "nothing here", "does not exist", "site not found"]
+        if any(ind in body_lower for ind in indicators):
+            # Only trigger if the word count is also relatively small (avoids false positives on blog posts about 404s)
+            if curr_words < 500:
+                if self.args.debug: self.log(f"[DEBUG] Heuristic 404 Match (Keywords): {url}", "GRAY")
                 return True
-        except: pass
+
         return False
 
     def probe_url(self, host, scheme, category, path):
         url = urljoin(f"{scheme}://{host}/", path.lstrip("/"))
         try:
-            # Efficient HEAD request with GET fallback
+            if self.args.debug:
+                self.log(f"[DEBUG] Probing: {url}", "GRAY")
+
+            # Try HEAD first
             resp = self.session.head(url, timeout=self.args.timeout, verify=False, 
                                      allow_redirects=not self.args.no_redirects)
             
             if resp.status_code in (405, 501):
                 resp = self.session.get(url, timeout=self.args.timeout, verify=False, 
                                         allow_redirects=not self.args.no_redirects, stream=True)
-                resp.close()
 
             if resp.status_code in (200, 206):
-                # Validate against Soft 404
-                if host in self.soft404_registry:
-                    s404 = self.soft404_registry[host]
-                    # Refetch content for precise comparison
-                    full_resp = self.session.get(url, timeout=self.args.timeout, verify=False)
-                    if len(full_resp.content) == s404["length"]:
-                        return None
+                # If we have a fingerprint, we MUST fetch the body to validate
+                full_resp = self.session.get(url, timeout=self.args.timeout, verify=False)
+                
+                if self.is_soft_404(host, scheme, url, full_resp):
+                    return None
 
                 severity = SEVERITY_MAP.get(category, "INFO")
                 finding = {
                     "host": host, "url": url, "category": category, "severity": severity,
-                    "status": resp.status_code, "length": resp.headers.get("Content-Length", "?"),
-                    "type": resp.headers.get("Content-Type", "?").split(";")[0],
+                    "status": full_resp.status_code, "length": len(full_resp.content),
+                    "type": full_resp.headers.get("Content-Type", "?").split(";")[0],
                     "timestamp": datetime.utcnow().isoformat()
                 }
                 self._print_finding(finding)
                 return finding
-        except: pass
+                
+            elif self.args.debug:
+                self.log(f"[DEBUG] {url} returned HTTP {resp.status_code}", "GRAY")
+        except Exception as e:
+            if self.args.debug:
+                self.log(f"[DEBUG] Error probing {url}: {e}", "GRAY")
         return None
 
     def _print_finding(self, f):
@@ -201,8 +272,9 @@ class SensitiveScanner:
 
     def run(self):
         self.start_time = time.time()
-        self.log("\n[*] Phase 1: Subdomain Discovery", "BOLD")
         
+        # Phase 1: Discovery
+        self.log("\n[*] Phase 1: Subdomain Discovery", "BOLD")
         hosts = set()
         if self.args.hosts:
             if os.path.exists(self.args.hosts):
@@ -225,13 +297,20 @@ class SensitiveScanner:
 
         if not live_hosts: return
 
-        self.log("[*] Phase 2: Vulnerability Probing", "BOLD")
-        self.log(f"[*] Soft 404 detection enabled. Threads: {self.args.threads}\n", "GRAY")
+        # Phase 2: Autocalibration
+        self.log("[*] Phase 2: Establishing Soft 404 Baselines", "BOLD")
+        for host in live_hosts:
+            for scheme in self.args.schemes:
+                self.autocalibrate(host, scheme)
+        self.log(f"[+] Calibrated fingerprints for {len(self.soft404_registry)} endpoints\n", "GREEN")
+
+        # Phase 3: Probing
+        self.log("[*] Phase 3: Vulnerability Probing", "BOLD")
+        self.log(f"[*] Analysis: Multi-factor fuzzy matching enabled. Threads: {self.args.threads}\n", "GRAY")
 
         tasks = set()
         for host in live_hosts:
             for scheme in self.args.schemes:
-                self.detect_soft404(host, scheme)
                 for cat in self.args.categories:
                     for path in SENSITIVE_PATHS.get(cat, []):
                         tasks.add((host, scheme, cat, path))
@@ -247,7 +326,7 @@ class SensitiveScanner:
     def report(self):
         elapsed = time.time() - self.start_time
         self.log(f"\n{'-'*60}", "GRAY")
-        self.log(f"  SCAN COMPLETE — {len(self.findings)} findings in {elapsed:.1f}s", "BOLD", True)
+        self.log(f"  SCAN COMPLETE - {len(self.findings)} findings in {elapsed:.1f}s", "BOLD", True)
         self.log(f"{'-'*60}\n", "GRAY")
 
         if self.args.output:
@@ -264,17 +343,17 @@ class SensitiveScanner:
 
 # Sensitive Path Catalogue
 SENSITIVE_PATHS = {
-    "VCS": [".git/config", ".git/HEAD", ".gitignore", ".svn/entries", ".hgignore"],
-    "ENV_SECRETS": [".env", ".env.local", "secrets.json", "credentials.json", ".aws/credentials"],
-    "APP_CONFIG": ["config.php", "web.config", "settings.py", "wp-config.php", "database.yml"],
-    "BACKUP_FILES": ["backup.sql", "db.sql", "archive.zip", "config.bak", "phpinfo.php"],
-    "LOG_FILES": ["error.log", "debug.log", "access.log", "laravel.log"],
-    "PACKAGE_MANIFESTS": ["package.json", "composer.json", "requirements.txt"],
-    "CLOUD_INFRA": ["Dockerfile", "docker-compose.yml", "terraform.tfstate", ".kube/config"],
-    "ADMIN_INTERFACES": ["admin/", "phpmyadmin/", "swagger-ui.html", "actuator/env"],
-    "CICD": [".github/workflows/", ".travis.yml", "Jenkinsfile"],
-    "KEYS_CERTS": ["id_rsa", "server.key", "cert.pem"],
-    "MISC": ["robots.txt", "sitemap.xml", "security.txt"]
+    "VCS": [".git/config"],
+    "ENV_SECRETS": [".env"],
+    "APP_CONFIG": ["web.config"],
+    "BACKUP_FILES": ["backup.sql", "phpinfo.php"],
+    "LOG_FILES": ["error.log"],
+    "PACKAGE_MANIFESTS": ["package.json"],
+    "CLOUD_INFRA": ["Dockerfile"],
+    "ADMIN_INTERFACES": ["admin/"],
+    "CICD": [".github/workflows/"],
+    "KEYS_CERTS": ["server.key"],
+    "MISC": ["robots.txt"]
 }
 
 def main():
@@ -293,7 +372,7 @@ def main():
     parser.add_argument("--phase1-only", action="store_true", help="Stop after Phase 1 discovery")
     
     args = parser.parse_args()
-    print(f"\n{COLORS['BOLD']}{COLORS['GRAY']}Scan.in — Lightweight Sensitive File Discovery{COLORS['RESET']}")
+    print(f"\n{COLORS['BOLD']}{COLORS['GRAY']}Scan.in - Lightweight Sensitive File Discovery{COLORS['RESET']}")
 
     scanner = SensitiveScanner(args)
     try:
