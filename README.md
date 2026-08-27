@@ -1,13 +1,13 @@
-# Scan.in — Sensitive File Discovery Tool
+# Scan.in - Sensitive File Discovery Tool
 
 **Scan.in** is a high-performance, lightweight black-box security tool designed to discover exposed sensitive files and directories across subdomains. It leverages a three-phase engine with multi-factor autocalibration to eliminate false positives while maintaining maximum scanning speed.
 
 ## 🚀 Key Features
 
-*   **Phase 1: Discovery** — Automated subdomain enumeration via `crt.sh` and rapid DNS resolution using optimized thread pools.
-*   **Phase 2: Autocalibration** — Dynamically establishes a "Not Found" baseline for every host/scheme. It fingerprints response attributes like word counts, line counts, and HTML tags (`<title>`, `<h1>`) to detect custom error pages.
-*   **Phase 3: High-Performance Probing** — Executes thousands of probes in parallel using a flattened concurrency model, bypassing the per-host bottlenecks found in traditional scanners.
-*   **Intelligent Filtering** — Uses fuzzy logic (5% tolerance on size/words) and keyword heuristics to verify findings, ensuring that a `200 OK` from a custom error page is never flagged as a valid exposure.
+*   **Phase 1: Discovery** - Automated subdomain enumeration via `crt.sh` and rapid DNS resolution using optimized thread pools.
+*   **Phase 2: Autocalibration** - Dynamically establishes a "Not Found" baseline for every host/scheme. It fingerprints response attributes like word counts, line counts, and HTML tags (`<title>`, `<h1>`) to detect custom error pages.
+*   **Phase 3: High-Performance Probing** - Executes thousands of probes in parallel using a flattened concurrency model, bypassing the per-host bottlenecks found in traditional scanners.
+*   **Intelligent Filtering** - Uses fuzzy logic (5% tolerance on size/words) and keyword heuristics to verify findings, ensuring that a `200 OK` from a custom error page is never flagged as a valid exposure.
 
 ---
 

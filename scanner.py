@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Scan.in — Sensitive File Discovery Tool"""
+"""Scan.in - Sensitive File Discovery Tool"""
 
 import sys
 import json
@@ -326,7 +326,7 @@ class SensitiveScanner:
     def report(self):
         elapsed = time.time() - self.start_time
         self.log(f"\n{'-'*60}", "GRAY")
-        self.log(f"  SCAN COMPLETE — {len(self.findings)} findings in {elapsed:.1f}s", "BOLD", True)
+        self.log(f"  SCAN COMPLETE - {len(self.findings)} findings in {elapsed:.1f}s", "BOLD", True)
         self.log(f"{'-'*60}\n", "GRAY")
 
         if self.args.output:
@@ -372,7 +372,7 @@ def main():
     parser.add_argument("--phase1-only", action="store_true", help="Stop after Phase 1 discovery")
     
     args = parser.parse_args()
-    print(f"\n{COLORS['BOLD']}{COLORS['GRAY']}Scan.in — Lightweight Sensitive File Discovery{COLORS['RESET']}")
+    print(f"\n{COLORS['BOLD']}{COLORS['GRAY']}Scan.in - Lightweight Sensitive File Discovery{COLORS['RESET']}")
 
     scanner = SensitiveScanner(args)
     try:
